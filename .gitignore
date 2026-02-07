@@ -19,9 +19,7 @@ build/
 backend/ml/models/*.pkl
 backend/ml/data/*.csv
 
-# Database
-*.db
-data/
+
 
 # IDE
 .vscode/

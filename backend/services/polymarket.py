@@ -1,53 +1,25 @@
 """
-Polymarket Service — Fetch NBA & sports events
-────────────────────────────────────────────────
-Fetches active, non-closed events from the Polymarket
-Gamma API. NBA-focused but catches other sports too.
+Polymarket Service — Fetch NBA games & sports futures
+─────────────────────────────────────────────────────
+Uses the Gamma API's tag system to fetch:
+  1. NBA games (moneyline matchups like "Celtics vs. Pistons")
+  2. NBA futures (championship, MVP, awards, etc.)
+  3. Other sports events (optional)
+
+Key discovery: tag_id=745 is NBA. Using /events?tag_id=745
+returns actual game-by-game matchups, not just futures.
 """
 
 import json
+from datetime import datetime, timezone
 import httpx
 from loguru import logger
 
 POLYMARKET_BASE = "https://gamma-api.polymarket.com"
 PAGE_LIMIT = 100
 
-# All 30 NBA teams — city names, team names, abbreviations
-NBA_TEAMS = [
-    "hawks", "celtics", "nets", "hornets", "bulls", "cavaliers", "mavericks",
-    "nuggets", "pistons", "warriors", "rockets", "pacers", "clippers", "lakers",
-    "grizzlies", "heat", "bucks", "timberwolves", "pelicans", "knicks",
-    "thunder", "magic", "76ers", "sixers", "suns", "trail blazers", "blazers",
-    "kings", "spurs", "raptors", "jazz", "wizards",
-    # City names that are less ambiguous
-    "atlanta", "boston", "brooklyn", "charlotte", "chicago", "cleveland",
-    "dallas", "denver", "detroit", "golden state", "houston", "indiana",
-    "los angeles", "memphis", "miami", "milwaukee", "minnesota",
-    "new orleans", "new york", "oklahoma city", "orlando", "philadelphia",
-    "phoenix", "portland", "sacramento", "san antonio", "toronto", "utah",
-    "washington",
-]
-
-# Primary keywords — things that are definitely sports
-SPORTS_KEYWORDS = [
-    # NBA (our focus)
-    "nba", "basketball", "nba champion", "nba mvp", "nba finals",
-    "march madness", "ncaa basketball",
-    # Other sports (still show them, just lower priority)
-    "nfl", "nhl", "mlb", "mls",
-    "super bowl", "stanley cup", "world series",
-    "premier league", "champions league", "la liga", "bundesliga",
-    "serie a", "ligue 1", "fifa", "world cup",
-    "f1", "formula 1", "grand prix",
-    "ufc", "boxing",
-    "tennis", "wimbledon", "us open", "australian open", "french open",
-    "olympics",
-    "mvp", "rookie of the year", "cy young", "ballon d'or",
-    "dpoy", "defensive player",
-]
-
-# Combine: any of these in title/slug means it's a sports event
-ALL_KEYWORDS = SPORTS_KEYWORDS + NBA_TEAMS
+# Tag IDs from the Polymarket /sports endpoint
+NBA_TAG_ID = 745
 
 
 class PolymarketService:
@@ -55,97 +27,207 @@ class PolymarketService:
     def __init__(self):
         self.client = httpx.AsyncClient(timeout=20.0)
 
-    async def get_sports_events(self, max_pages: int = 5, min_volume: float = 0) -> list[dict]:
+    # ── NBA Games (moneyline matchups) ───────────────────
+    async def get_nba_games(self) -> list[dict]:
         """
-        Paginate through active Polymarket events, filter to sports.
-        Returns normalized data sorted by volume descending.
+        Fetch active NBA game events (e.g. "Celtics vs. Pistons").
+        These are the actual game-by-game moneyline markets.
+        Returns games sorted by end date (soonest first).
         """
-        sports_events = []
+        all_events = await self._fetch_events_by_tag(NBA_TAG_ID, max_pages=3)
 
-        for page in range(max_pages):
-            try:
-                resp = await self.client.get(
-                    f"{POLYMARKET_BASE}/events",
-                    params={
-                        "active": "true",
-                        "closed": "false",
-                        "limit": PAGE_LIMIT,
-                        "offset": page * PAGE_LIMIT,
-                    },
-                )
-                resp.raise_for_status()
-                events = resp.json()
-            except Exception as e:
-                logger.error(f"Polymarket fetch page {page} failed: {e}")
-                break
+        now = datetime.now(timezone.utc).isoformat()
+        games = []
+        for ev in all_events:
+            # Games have "vs." in the title
+            if "vs." not in ev.get("title", ""):
+                continue
+            normalized = self._normalize_game(ev)
+            if not normalized:
+                continue
+            # Filter out past/decided games (100%/0% or game already ended)
+            if normalized["game_date"] and normalized["game_date"] < now:
+                continue
+            if any(t["probability"] >= 0.99 for t in normalized["teams"]):
+                continue
+            games.append(normalized)
 
-            if not events:
-                break
+        # Sort by game date (soonest first)
+        games.sort(key=lambda g: g["game_date"] or "9999")
+        logger.info(f"Fetched {len(games)} upcoming NBA games from Polymarket")
+        return games
 
-            for ev in events:
-                title = ev.get("title", "")
-                slug = ev.get("slug", "")
-                combined = f"{title} {slug}".lower()
+    # ── NBA Futures (championship, awards, etc.) ─────────
+    async def get_nba_futures(self) -> list[dict]:
+        """
+        Fetch NBA futures/awards (e.g. "2026 NBA Champion", "NBA MVP").
+        These are the multi-outcome markets, not individual games.
+        Returns futures sorted by volume descending.
+        """
+        all_events = await self._fetch_events_by_tag(NBA_TAG_ID, max_pages=3)
 
-                if not any(kw in combined for kw in ALL_KEYWORDS):
+        futures = []
+        for ev in all_events:
+            # Futures don't have "vs." in the title
+            if "vs." in ev.get("title", ""):
+                continue
+            normalized = self._normalize_future(ev)
+            if normalized:
+                futures.append(normalized)
+
+        futures.sort(key=lambda f: f["volume"], reverse=True)
+        logger.info(f"Fetched {len(futures)} NBA futures from Polymarket")
+        return futures
+
+    # ── Combined: all NBA events ─────────────────────────
+    async def get_all_nba(self) -> dict:
+        """Return both games and futures in one call."""
+        all_events = await self._fetch_events_by_tag(NBA_TAG_ID, max_pages=3)
+
+        now = datetime.now(timezone.utc).isoformat()
+        games = []
+        futures = []
+
+        for ev in all_events:
+            if "vs." in ev.get("title", ""):
+                normalized = self._normalize_game(ev)
+                if not normalized:
                     continue
-
-                volume = ev.get("volume", 0) or 0
-                if volume < min_volume:
+                if normalized["game_date"] and normalized["game_date"] < now:
                     continue
+                if any(t["probability"] >= 0.99 for t in normalized["teams"]):
+                    continue
+                games.append(normalized)
+            else:
+                normalized = self._normalize_future(ev)
+                if normalized:
+                    futures.append(normalized)
 
-                normalized = self._normalize_event(ev)
-                if normalized["outcomes"]:
-                    sports_events.append(normalized)
+        games.sort(key=lambda g: g["game_date"] or "9999")
+        futures.sort(key=lambda f: f["volume"], reverse=True)
 
-        sports_events.sort(key=lambda e: e["volume"], reverse=True)
-        logger.info(f"Fetched {len(sports_events)} sports events from Polymarket")
-        return sports_events
+        return {"games": games, "futures": futures}
 
-    async def search_events(self, query: str, max_pages: int = 5) -> list[dict]:
-        """Search for events matching a query string."""
+    # ── Search ───────────────────────────────────────────
+    async def search_events(self, query: str) -> list[dict]:
+        """Search NBA events by keyword."""
         keywords = query.lower().split()
+        all_events = await self._fetch_events_by_tag(NBA_TAG_ID, max_pages=3)
+
         results = []
+        for ev in all_events:
+            title = (ev.get("title", "") or "").lower()
+            desc = (ev.get("description", "") or "").lower()
+            combined = f"{title} {desc}"
+            if all(kw in combined for kw in keywords):
+                if "vs." in ev.get("title", ""):
+                    n = self._normalize_game(ev)
+                else:
+                    n = self._normalize_future(ev)
+                if n:
+                    results.append(n)
 
-        for page in range(max_pages):
-            try:
-                resp = await self.client.get(
-                    f"{POLYMARKET_BASE}/events",
-                    params={
-                        "active": "true",
-                        "closed": "false",
-                        "limit": PAGE_LIMIT,
-                        "offset": page * PAGE_LIMIT,
-                    },
-                )
-                resp.raise_for_status()
-                events = resp.json()
-            except Exception as e:
-                logger.error(f"Search page {page} failed: {e}")
-                break
-
-            if not events:
-                break
-
-            for ev in events:
-                title = (ev.get("title", "") or "").lower()
-                desc = (ev.get("description", "") or "").lower()
-                combined = f"{title} {desc}"
-                if all(kw in combined for kw in keywords):
-                    normalized = self._normalize_event(ev)
-                    if normalized["outcomes"]:
-                        results.append(normalized)
-
-            if results:
-                break
-
-        results.sort(key=lambda e: e["volume"], reverse=True)
         return results
 
-    def _normalize_event(self, ev: dict) -> dict:
+    # ── Internal: fetch events by tag ────────────────────
+    async def _fetch_events_by_tag(self, tag_id: int, max_pages: int = 3) -> list[dict]:
+        """Paginate through events filtered by tag ID."""
+        all_events = []
+
+        for page in range(max_pages):
+            try:
+                resp = await self.client.get(
+                    f"{POLYMARKET_BASE}/events",
+                    params={
+                        "tag_id": tag_id,
+                        "closed": "false",
+                        "limit": PAGE_LIMIT,
+                        "offset": page * PAGE_LIMIT,
+                        "order": "id",
+                        "ascending": "false",
+                    },
+                )
+                resp.raise_for_status()
+                events = resp.json()
+            except Exception as e:
+                logger.error(f"Polymarket fetch page {page} (tag={tag_id}) failed: {e}")
+                break
+
+            if not events:
+                break
+
+            all_events.extend(events)
+
+        return all_events
+
+    # ── Normalize a game event ───────────────────────────
+    def _normalize_game(self, ev: dict) -> dict | None:
         """
-        Normalize a Polymarket event into a flat list of outcomes
-        with probabilities extracted from market prices.
+        Normalize a game event like "Celtics vs. Pistons" into a clean dict.
+        Extracts the two teams and their moneyline probabilities.
+        """
+        markets = ev.get("markets", [])
+        if not markets:
+            return None
+
+        # Find the moneyline market
+        ml_market = None
+        for m in markets:
+            st = m.get("sportsMarketType", "")
+            if st == "moneyline" or not st:
+                ml_market = m
+                break
+
+        if not ml_market:
+            ml_market = markets[0]
+
+        try:
+            outcomes = json.loads(ml_market.get("outcomes", "[]")) if isinstance(ml_market.get("outcomes"), str) else ml_market.get("outcomes", [])
+            prices = json.loads(ml_market.get("outcomePrices", "[]")) if isinstance(ml_market.get("outcomePrices"), str) else ml_market.get("outcomePrices", [])
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+        if len(outcomes) < 2 or len(prices) < 2:
+            return None
+
+        # Parse the two teams and their probabilities
+        teams = []
+        for name, price in zip(outcomes, prices):
+            try:
+                prob = float(price)
+            except (ValueError, TypeError):
+                prob = 0.5
+            teams.append({"name": name, "probability": round(prob, 4)})
+
+        # Sort so the favorite is first
+        teams.sort(key=lambda t: t["probability"], reverse=True)
+
+        return {
+            "id": ev.get("id", ""),
+            "type": "game",
+            "title": ev.get("title", ""),
+            "slug": ev.get("slug", ""),
+            "description": ev.get("description", ""),
+            "image": ev.get("image", ""),
+            "category": "NBA",
+            "game_date": ev.get("endDate", ""),
+            "volume": float(ev.get("volume", 0) or 0),
+            "liquidity": float(ev.get("liquidity", 0) or 0),
+            "competitive": float(ev.get("competitive", 0) or 0),
+            "teams": teams,
+            # Keep outcomes format for backwards compat with frontend
+            "outcomes": [
+                {"name": t["name"], "probability": t["probability"]}
+                for t in teams
+            ],
+            "markets_count": len(markets),
+        }
+
+    # ── Normalize a futures event ────────────────────────
+    def _normalize_future(self, ev: dict) -> dict | None:
+        """
+        Normalize a futures event like "2026 NBA Champion" into a clean dict.
+        Extracts all outcomes with probabilities.
         """
         markets = ev.get("markets", [])
         outcomes = []
@@ -164,27 +246,16 @@ class PolymarketService:
                 continue
 
             question = m.get("question", "")
-            market_image = m.get("image", "")
 
-            # Yes/No market (e.g. "Will the Lakers win the NBA Championship?")
+            # Yes/No market (e.g. "Will the Lakers win the championship?")
             if len(outs) == 2 and "Yes" in outs and "No" in outs:
                 yes_idx = outs.index("Yes")
                 yes_price = float(prices[yes_idx]) if yes_idx < len(prices) else 0
-
                 if yes_price < 0.005:
                     continue
-
                 name = self._extract_entity(question, ev.get("title", ""))
-
-                outcomes.append({
-                    "name": name,
-                    "probability": round(yes_price, 4),
-                    "image": market_image,
-                    "market_id": m.get("id", ""),
-                    "question": question,
-                })
+                outcomes.append({"name": name, "probability": round(yes_price, 4)})
             else:
-                # Multi-outcome market
                 for o, p in zip(outs, prices):
                     try:
                         prob = float(p)
@@ -192,22 +263,20 @@ class PolymarketService:
                         prob = 0
                     if prob < 0.005:
                         continue
-                    outcomes.append({
-                        "name": o,
-                        "probability": round(prob, 4),
-                        "image": market_image,
-                        "market_id": m.get("id", ""),
-                        "question": question if question else o,
-                    })
+                    outcomes.append({"name": o, "probability": round(prob, 4)})
+
+        if not outcomes:
+            return None
 
         outcomes.sort(key=lambda o: o["probability"], reverse=True)
 
         return {
             "id": ev.get("id", ""),
+            "type": "future",
             "title": ev.get("title", ""),
             "slug": ev.get("slug", ""),
             "image": ev.get("image", ""),
-            "category": self._detect_category(ev),
+            "category": "NBA",
             "volume": float(ev.get("volume", 0) or 0),
             "liquidity": float(ev.get("liquidity", 0) or 0),
             "end_date": ev.get("endDate", ""),
@@ -215,52 +284,16 @@ class PolymarketService:
             "markets_count": len(markets),
         }
 
+    # ── Helpers ──────────────────────────────────────────
     def _extract_entity(self, question: str, event_title: str) -> str:
-        """Extract entity name from a question like 'Will the X win ...'"""
+        """Extract entity name from 'Will the X win ...' style questions."""
         q = question.strip()
         if q.lower().startswith("will "):
             rest = q[5:]
             if rest.lower().startswith("the "):
                 rest = rest[4:]
-            win_idx = rest.lower().find(" win ")
-            if win_idx > 0:
-                return rest[:win_idx].strip()
-            be_idx = rest.lower().find(" be ")
-            if be_idx > 0:
-                return rest[:be_idx].strip()
+            for marker in [" win ", " be ", " make ", " finish ", " lead ", " record "]:
+                idx = rest.lower().find(marker)
+                if idx > 0:
+                    return rest[:idx].strip()
         return question[:50] if question else "Unknown"
-
-    def _detect_category(self, ev: dict) -> str:
-        """Detect the sport category from event title and description."""
-        title = ev.get("title", "")
-        desc = ev.get("description", "") or ""
-        t = f"{title} {desc}".lower()
-
-        # NBA first (our focus)
-        if "nba" in t or "basketball" in t:
-            return "NBA"
-        if any(team in t for team in NBA_TEAMS):
-            return "NBA"
-
-        # Other sports
-        if "nfl" in t or "super bowl" in t or "football" in t:
-            return "NFL"
-        if "nhl" in t or "stanley cup" in t or "hockey" in t:
-            return "NHL"
-        if "mlb" in t or "world series" in t or "baseball" in t:
-            return "MLB"
-        if "premier league" in t:
-            return "EPL"
-        if "champions league" in t or "uefa" in t:
-            return "UCL"
-        if "fifa" in t or "world cup" in t:
-            return "FIFA"
-        if "f1" in t or "formula" in t:
-            return "F1"
-        if "ufc" in t or "boxing" in t:
-            return "UFC"
-        if "mvp" in t or "dpoy" in t or "defensive player" in t:
-            return "Award"
-        if "rookie" in t or "cy young" in t:
-            return "Award"
-        return "Sports"

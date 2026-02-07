@@ -8,3 +8,11 @@ httpx==0.27.2
 
 # Logging
 loguru==0.7.2
+
+# ML / Data
+scikit-learn
+pandas
+numpy
+
+# NBA data scraping
+nba_api

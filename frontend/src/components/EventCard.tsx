@@ -1,14 +1,14 @@
 "use client";
 
-import { PolymarketEvent } from "@/lib/api";
+import { NBAFuture } from "@/lib/api";
 import DonutChart from "./DonutChart";
 import ProbabilityBars from "./ProbabilityBars";
 import { TrendingUp, Clock, BarChart3 } from "lucide-react";
 
 interface EventCardProps {
-  event: PolymarketEvent;
+  event: NBAFuture;
   index: number;
-  onClick?: (event: PolymarketEvent) => void;
+  onClick?: (event: NBAFuture) => void;
 }
 
 function formatVolume(v: number): string {
@@ -23,37 +23,18 @@ function formatDate(iso: string | null): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-// Category color mapping
-const CAT_COLORS: Record<string, { bg: string; text: string }> = {
-  NBA: { bg: "rgba(251, 146, 60, 0.14)", text: "#fb923c" },
-  NFL: { bg: "rgba(96, 165, 250, 0.14)", text: "#60a5fa" },
-  MLB: { bg: "rgba(52, 211, 153, 0.14)", text: "#34d399" },
-  NHL: { bg: "rgba(34, 211, 238, 0.14)", text: "#22d3ee" },
-  EPL: { bg: "rgba(167, 139, 250, 0.14)", text: "#a78bfa" },
-  UCL: { bg: "rgba(244, 114, 182, 0.14)", text: "#f472b6" },
-  FIFA: { bg: "rgba(163, 230, 53, 0.14)", text: "#a3e635" },
-  F1: { bg: "rgba(248, 113, 113, 0.14)", text: "#f87171" },
-  UFC: { bg: "rgba(251, 191, 36, 0.14)", text: "#fbbf24" },
-  Tennis: { bg: "rgba(129, 140, 248, 0.14)", text: "#818cf8" },
-  Award: { bg: "rgba(232, 121, 249, 0.14)", text: "#e879f9" },
-};
-
-const DEFAULT_CAT = { bg: "rgba(161, 161, 170, 0.14)", text: "#a1a1aa" };
-
 export default function EventCard({ event, index, onClick }: EventCardProps) {
-  const catStyle = CAT_COLORS[event.category] || DEFAULT_CAT;
   const hasMultipleCharts = event.outcomes.length > 2;
 
   return (
     <div
       role={onClick ? "button" : undefined}
-      onClick={() => onClick && onClick(event)}
+      onClick={() => onClick?.(event)}
       className="glass-card p-5 fade-in flex flex-col cursor-pointer hover:scale-[1.01] transition-transform"
       style={{ animationDelay: `${index * 50}ms` }}
     >
       {/* Header */}
       <div className="flex items-start gap-3 mb-4">
-        {/* Event image */}
         {event.image && (
           <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-bg-elevated">
             <img
@@ -73,9 +54,9 @@ export default function EventCard({ event, index, onClick }: EventCardProps) {
           <div className="flex items-center gap-2 mt-1.5">
             <span
               className="cat-pill"
-              style={{ background: catStyle.bg, color: catStyle.text }}
+              style={{ background: "rgba(251, 146, 60, 0.14)", color: "#fb923c" }}
             >
-              {event.category}
+              NBA
             </span>
             <span className="text-[11px] text-text-muted flex items-center gap-1">
               <BarChart3 size={10} />
@@ -85,7 +66,7 @@ export default function EventCard({ event, index, onClick }: EventCardProps) {
         </div>
       </div>
 
-      {/* Chart + Bars section */}
+      {/* Chart + Bars */}
       <div className="flex-1">
         {hasMultipleCharts ? (
           <div className="flex gap-4 items-start">

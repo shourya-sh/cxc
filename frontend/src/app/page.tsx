@@ -1,46 +1,64 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { fetchEvents, searchEvents, PolymarketEvent } from "@/lib/api";
+import { useState, useEffect } from "react";
+import {
+  fetchAllNBA,
+  fetchPredictions,
+  NBAGame,
+  NBAFuture,
+} from "@/lib/api";
+import GameCard from "@/components/GameCard";
 import EventCard from "@/components/EventCard";
 import EventModal from "@/components/EventModal";
-import SearchBar from "@/components/SearchBar";
-import CategoryFilter from "@/components/CategoryFilter";
+import PromptBar from "@/components/PromptBar";
 import LoadingSkeleton from "@/components/LoadingSkeleton";
-import StatsRow from "@/components/StatsRow";
-import { RefreshCw, Zap, ExternalLink } from "lucide-react";
-
-const SORT_OPTIONS = [
-  { label: "Volume", value: "volume" },
-  { label: "Ending Soon", value: "end_date" },
-  { label: "Markets", value: "markets" },
-] as const;
-
-type SortKey = (typeof SORT_OPTIONS)[number]["value"];
+import AnalysisView from "@/components/AnalysisView";
+import { RefreshCw, Zap, ExternalLink, Brain, BarChart3 } from "lucide-react";
 
 export default function Home() {
-  const [events, setEvents] = useState<PolymarketEvent[]>([]);
+  const [games, setGames] = useState<NBAGame[]>([]);
+  const [futures, setFutures] = useState<NBAFuture[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeCategory, setActiveCategory] = useState("all");
-  const [sortBy, setSortBy] = useState<SortKey>("volume");
-  const [searchQuery, setSearchQuery] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState<PolymarketEvent | null>(null);
+  const [selectedFuture, setSelectedFuture] = useState<NBAFuture | null>(null);
+  const [activeTab, setActiveTab] = useState<"games" | "futures" | "analysis">(
+    "games"
+  );
+  const [modelAccuracy, setModelAccuracy] = useState<number | null>(null);
 
-  const loadEvents = async (query?: string) => {
+  const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
-      let data: PolymarketEvent[];
-      if (query) {
-        data = await searchEvents(query);
-        setSearchQuery(query);
+      // Fetch Polymarket data and predictions in parallel
+      const [nbaData, predData] = await Promise.all([
+        fetchAllNBA(),
+        fetchPredictions().catch(() => null),
+      ]);
+
+      // If predictions loaded, merge them into games
+      if (predData?.games) {
+        // Build a map of game_id -> prediction
+        const predMap = new Map<string, NBAGame>();
+        for (const g of predData.games) {
+          predMap.set(g.id, g);
+        }
+        // Merge predictions into Polymarket games
+        const mergedGames = nbaData.games.map((game) => {
+          const withPred = predMap.get(game.id);
+          return {
+            ...game,
+            prediction: withPred?.prediction ?? null,
+          };
+        });
+        setGames(mergedGames);
+        setModelAccuracy(predData.model_accuracy);
       } else {
-        data = await fetchEvents();
-        setSearchQuery(null);
+        setGames(nbaData.games);
       }
-      setEvents(data);
+
+      setFutures(nbaData.futures);
     } catch (err: any) {
       setError(
         err.message?.includes("API error")
@@ -53,52 +71,20 @@ export default function Home() {
   };
 
   useEffect(() => {
-    loadEvents();
+    loadData();
   }, []);
 
   const refresh = async () => {
     setRefreshing(true);
-    await loadEvents(searchQuery || undefined);
+    await loadData();
     setRefreshing(false);
   };
 
-  // Derived data
-  const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    events.forEach((e) => {
-      counts[e.category] = (counts[e.category] || 0) + 1;
-    });
-    return counts;
-  }, [events]);
-
-  const categories = useMemo(
-    () =>
-      Object.entries(categoryCounts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([k]) => k),
-    [categoryCounts]
+  const totalVolume = [...games, ...futures].reduce(
+    (s, e) => s + e.volume,
+    0
   );
-
-  const filtered = useMemo(() => {
-    let list =
-      activeCategory === "all"
-        ? events
-        : events.filter((e) => e.category === activeCategory);
-
-    // Sort
-    list = [...list].sort((a, b) => {
-      if (sortBy === "volume") return b.volume - a.volume;
-      if (sortBy === "markets") return b.markets_count - a.markets_count;
-      if (sortBy === "end_date") {
-        const da = a.end_date ? new Date(a.end_date).getTime() : Infinity;
-        const db = b.end_date ? new Date(b.end_date).getTime() : Infinity;
-        return da - db;
-      }
-      return 0;
-    });
-
-    return list;
-  }, [events, activeCategory, sortBy]);
+  const gamesWithPredictions = games.filter((g) => g.prediction).length;
 
   return (
     <div className="min-h-screen px-4 md:px-8 py-6 max-w-[1440px] mx-auto">
@@ -112,7 +98,7 @@ export default function Home() {
             <div>
               <h1 className="text-xl font-bold tracking-tight">CXC</h1>
               <p className="text-xs text-text-muted">
-                Sports Betting Intelligence
+                NBA Betting Intelligence
               </p>
             </div>
           </div>
@@ -130,7 +116,7 @@ export default function Home() {
               Refresh
             </button>
             <a
-              href="https://polymarket.com"
+              href="https://polymarket.com/sports/nba/games"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-bg-elevated border border-border rounded-lg text-text-secondary hover:text-text-primary hover:border-border-light transition-all"
@@ -141,28 +127,13 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Search */}
-        <div className="flex justify-center mb-6">
-          <SearchBar onSearch={(q) => loadEvents(q)} isLoading={loading} />
+        {/* AI Prompt Bar */}
+        <div className="mb-6">
+          <PromptBar />
         </div>
-
-        {/* Search result indicator */}
-        {searchQuery && (
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-sm text-text-secondary">
-              Results for &ldquo;{searchQuery}&rdquo;
-            </span>
-            <button
-              onClick={() => loadEvents()}
-              className="text-xs text-accent hover:underline"
-            >
-              Clear
-            </button>
-          </div>
-        )}
       </header>
 
-      {/* Error state */}
+      {/* Error */}
       {error && (
         <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-sm text-red-400">
           {error}
@@ -170,80 +141,225 @@ export default function Home() {
       )}
 
       {/* Loading */}
-      {loading && <LoadingSkeleton count={9} />}
+      {loading && activeTab !== "analysis" && <LoadingSkeleton count={9} />}
 
-      {/* Content */}
+      {/* Main content */}
       {!loading && !error && (
         <>
-          {/* Stats row */}
-          <StatsRow events={events} />
-
-          {/* Filters row */}
-          <div className="flex items-center justify-between mt-6 mb-5 gap-4 flex-wrap">
-            <CategoryFilter
-              categories={categories}
-              active={activeCategory}
-              onSelect={setActiveCategory}
-              counts={categoryCounts}
-            />
-
-            {/* Sort */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-text-muted">Sort:</span>
-              {SORT_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setSortBy(opt.value)}
-                  className={`px-2.5 py-1 text-xs rounded-md transition-all ${
-                    sortBy === opt.value
-                      ? "bg-bg-hover text-text-primary font-medium"
-                      : "text-text-muted hover:text-text-secondary"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+          {/* Stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+            <div className="bg-bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-3">
+              <div
+                className="w-8 h-8 rounded-lg flex items-center justify-center"
+                style={{ background: "#fb923c18" }}
+              >
+                <span className="text-sm" style={{ color: "#fb923c" }}>
+                  🏀
+                </span>
+              </div>
+              <div>
+                <p className="text-xs text-text-muted">Games</p>
+                <p className="text-base font-bold text-text-primary">
+                  {games.length}
+                </p>
+              </div>
+            </div>
+            <div className="bg-bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-3">
+              <div
+                className="w-8 h-8 rounded-lg flex items-center justify-center"
+                style={{ background: "#a78bfa18" }}
+              >
+                <span className="text-sm" style={{ color: "#a78bfa" }}>
+                  🏆
+                </span>
+              </div>
+              <div>
+                <p className="text-xs text-text-muted">Futures</p>
+                <p className="text-base font-bold text-text-primary">
+                  {futures.length}
+                </p>
+              </div>
+            </div>
+            <div className="bg-bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-3">
+              <div
+                className="w-8 h-8 rounded-lg flex items-center justify-center"
+                style={{ background: "#34d39918" }}
+              >
+                <span className="text-sm" style={{ color: "#34d399" }}>
+                  💰
+                </span>
+              </div>
+              <div>
+                <p className="text-xs text-text-muted">Total Volume</p>
+                <p className="text-base font-bold text-text-primary">
+                  $
+                  {totalVolume >= 1_000_000
+                    ? `${(totalVolume / 1_000_000).toFixed(1)}M`
+                    : `${(totalVolume / 1_000).toFixed(0)}K`}
+                </p>
+              </div>
+            </div>
+            <div className="bg-bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-3">
+              <div
+                className="w-8 h-8 rounded-lg flex items-center justify-center"
+                style={{ background: "#22d3ee18" }}
+              >
+                <Brain size={16} style={{ color: "#22d3ee" }} />
+              </div>
+              <div>
+                <p className="text-xs text-text-muted">Model Accuracy</p>
+                <p className="text-base font-bold text-text-primary">
+                  {modelAccuracy
+                    ? `${(modelAccuracy * 100).toFixed(1)}%`
+                    : "—"}
+                </p>
+              </div>
             </div>
           </div>
 
-          {/* Grid */}
-          {filtered.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {filtered.map((event, i) => (
-                <EventCard key={event.id} event={event} index={i} onClick={setSelectedEvent} />
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-20">
-              <p className="text-text-muted text-sm">
-                No events found
-                {activeCategory !== "all"
-                  ? ` in ${activeCategory}`
-                  : searchQuery
-                  ? ` for "${searchQuery}"`
-                  : ""}
-                .
-              </p>
-            </div>
+          {/* Tab switcher */}
+          <div className="flex items-center gap-2 mb-5">
+            <button
+              onClick={() => setActiveTab("games")}
+              className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                activeTab === "games"
+                  ? "bg-accent text-bg-primary"
+                  : "bg-bg-elevated text-text-secondary hover:text-text-primary"
+              }`}
+            >
+              Games ({games.length})
+              {gamesWithPredictions > 0 && (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold"
+                  style={{
+                    background:
+                      activeTab === "games"
+                        ? "rgba(0,0,0,0.2)"
+                        : "rgba(34,211,238,0.15)",
+                    color:
+                      activeTab === "games" ? "rgba(0,0,0,0.6)" : "#22d3ee",
+                  }}
+                >
+                  <Brain size={8} className="inline mr-0.5" />
+                  {gamesWithPredictions}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setActiveTab("futures")}
+              className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${
+                activeTab === "futures"
+                  ? "bg-accent text-bg-primary"
+                  : "bg-bg-elevated text-text-secondary hover:text-text-primary"
+              }`}
+            >
+              Futures ({futures.length})
+            </button>
+            <button
+              onClick={() => setActiveTab("analysis")}
+              className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                activeTab === "analysis"
+                  ? "bg-accent text-bg-primary"
+                  : "bg-bg-elevated text-text-secondary hover:text-text-primary"
+              }`}
+            >
+              <BarChart3 size={13} />
+              Analysis
+            </button>
+          </div>
+
+          {/* Games grid */}
+          {activeTab === "games" && (
+            <>
+              {gamesWithPredictions > 0 && (
+                <div className="mb-4 p-3 rounded-xl bg-bg-elevated border border-border flex items-center gap-3">
+                  <Brain size={16} className="text-accent flex-shrink-0" />
+                  <p className="text-xs text-text-secondary">
+                    Each card shows two bars:{" "}
+                    <span className="text-text-primary font-semibold">Market</span>{" "}
+                    (Polymarket odds) and{" "}
+                    <span className="text-text-primary font-semibold">Model</span>{" "}
+                    (our ML prediction). Compare the split to spot differences.{" "}
+                    <span
+                      className="cat-pill"
+                      style={{
+                        background: "rgba(251, 146, 60, 0.14)",
+                        color: "#fb923c",
+                      }}
+                    >
+                      Edge
+                    </span>{" "}
+                    = model disagrees with the market on the favorite.
+                  </p>
+                </div>
+              )}
+              {games.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {games.map((game, i) => (
+                    <GameCard key={game.id} game={game} index={i} />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-20">
+                  <p className="text-text-muted text-sm">
+                    No NBA games found on Polymarket right now.
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
-          {selectedEvent && (
-            <EventModal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+          {/* Futures grid */}
+          {activeTab === "futures" && (
+            <>
+              {futures.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {futures.map((ev, i) => (
+                    <EventCard
+                      key={ev.id}
+                      event={ev}
+                      index={i}
+                      onClick={setSelectedFuture}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-20">
+                  <p className="text-text-muted text-sm">
+                    No NBA futures found.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Analysis view */}
+          {activeTab === "analysis" && <AnalysisView />}
+
+          {selectedFuture && (
+            <EventModal
+              event={selectedFuture}
+              onClose={() => setSelectedFuture(null)}
+            />
           )}
 
           {/* Footer */}
           <footer className="mt-12 pb-8 text-center">
             <p className="text-xs text-text-muted">
-              Live data from{" "}
+              Live NBA data from{" "}
               <a
-                href="https://polymarket.com"
+                href="https://polymarket.com/sports/nba/games"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-accent hover:underline"
               >
                 Polymarket
               </a>{" "}
-              &middot; {events.length} events &middot; Updated in real-time
+              &middot; ML predictions by CXC Model (
+              {modelAccuracy
+                ? `${(modelAccuracy * 100).toFixed(1)}%`
+                : "loading"}
+              ) &middot; {games.length} games &middot; {futures.length} futures
             </p>
           </footer>
         </>

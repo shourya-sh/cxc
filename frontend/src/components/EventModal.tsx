@@ -1,12 +1,12 @@
 "use client";
 
-import { PolymarketEvent } from "@/lib/api";
+import { NBAFuture } from "@/lib/api";
 import ProbabilityBars from "./ProbabilityBars";
 import DonutChart from "./DonutChart";
 import { X, ExternalLink, TrendingUp, Clock, BarChart3, DollarSign } from "lucide-react";
 
 interface EventModalProps {
-  event: PolymarketEvent | null;
+  event: NBAFuture | null;
   onClose: () => void;
 }
 
