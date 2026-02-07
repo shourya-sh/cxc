@@ -57,15 +57,3 @@ export async function searchEvents(
   );
   return data.results || [];
 }
-
-// ── Prompts (AI) ────────────────────────────────────────
-
-export async function askPrompt(
-  prompt: string,
-  context?: Record<string, any>
-) {
-  return apiFetch("/prompts/ask", {
-    method: "POST",
-    body: JSON.stringify({ prompt, context }),
-  });
-}

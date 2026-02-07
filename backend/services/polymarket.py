@@ -1,10 +1,8 @@
 """
-Polymarket Service — Real sports event scraping
+Polymarket Service — Fetch NBA & sports events
 ────────────────────────────────────────────────
-Fetches active, non-closed sports events from
-the Polymarket Gamma API with proper pagination.
-Parses multi-outcome markets (e.g. "2026 NBA Champion"
-has 30 sub-markets, one per team).
+Fetches active, non-closed events from the Polymarket
+Gamma API. NBA-focused but catches other sports too.
 """
 
 import json
@@ -14,18 +12,42 @@ from loguru import logger
 POLYMARKET_BASE = "https://gamma-api.polymarket.com"
 PAGE_LIMIT = 100
 
+# All 30 NBA teams — city names, team names, abbreviations
+NBA_TEAMS = [
+    "hawks", "celtics", "nets", "hornets", "bulls", "cavaliers", "mavericks",
+    "nuggets", "pistons", "warriors", "rockets", "pacers", "clippers", "lakers",
+    "grizzlies", "heat", "bucks", "timberwolves", "pelicans", "knicks",
+    "thunder", "magic", "76ers", "sixers", "suns", "trail blazers", "blazers",
+    "kings", "spurs", "raptors", "jazz", "wizards",
+    # City names that are less ambiguous
+    "atlanta", "boston", "brooklyn", "charlotte", "chicago", "cleveland",
+    "dallas", "denver", "detroit", "golden state", "houston", "indiana",
+    "los angeles", "memphis", "miami", "milwaukee", "minnesota",
+    "new orleans", "new york", "oklahoma city", "orlando", "philadelphia",
+    "phoenix", "portland", "sacramento", "san antonio", "toronto", "utah",
+    "washington",
+]
+
+# Primary keywords — things that are definitely sports
 SPORTS_KEYWORDS = [
-    "nba", "nfl", "nhl", "mlb", "mls",
+    # NBA (our focus)
+    "nba", "basketball", "nba champion", "nba mvp", "nba finals",
+    "march madness", "ncaa basketball",
+    # Other sports (still show them, just lower priority)
+    "nfl", "nhl", "mlb", "mls",
     "super bowl", "stanley cup", "world series",
-    "march madness", "ncaa",
-    "premier league", "champions league", "la liga", "bundesliga", "serie a", "ligue 1",
-    "fifa", "world cup",
+    "premier league", "champions league", "la liga", "bundesliga",
+    "serie a", "ligue 1", "fifa", "world cup",
     "f1", "formula 1", "grand prix",
     "ufc", "boxing",
     "tennis", "wimbledon", "us open", "australian open", "french open",
     "olympics",
     "mvp", "rookie of the year", "cy young", "ballon d'or",
+    "dpoy", "defensive player",
 ]
+
+# Combine: any of these in title/slug means it's a sports event
+ALL_KEYWORDS = SPORTS_KEYWORDS + NBA_TEAMS
 
 
 class PolymarketService:
@@ -35,7 +57,7 @@ class PolymarketService:
 
     async def get_sports_events(self, max_pages: int = 5, min_volume: float = 0) -> list[dict]:
         """
-        Paginate through active Polymarket events and filter to sports.
+        Paginate through active Polymarket events, filter to sports.
         Returns normalized data sorted by volume descending.
         """
         sports_events = []
@@ -65,7 +87,7 @@ class PolymarketService:
                 slug = ev.get("slug", "")
                 combined = f"{title} {slug}".lower()
 
-                if not any(kw in combined for kw in SPORTS_KEYWORDS):
+                if not any(kw in combined for kw in ALL_KEYWORDS):
                     continue
 
                 volume = ev.get("volume", 0) or 0
@@ -122,8 +144,8 @@ class PolymarketService:
 
     def _normalize_event(self, ev: dict) -> dict:
         """
-        Normalize a Polymarket event with all its sub-markets
-        into a flat list of outcomes with probabilities.
+        Normalize a Polymarket event into a flat list of outcomes
+        with probabilities extracted from market prices.
         """
         markets = ev.get("markets", [])
         outcomes = []
@@ -144,6 +166,7 @@ class PolymarketService:
             question = m.get("question", "")
             market_image = m.get("image", "")
 
+            # Yes/No market (e.g. "Will the Lakers win the NBA Championship?")
             if len(outs) == 2 and "Yes" in outs and "No" in outs:
                 yes_idx = outs.index("Yes")
                 yes_price = float(prices[yes_idx]) if yes_idx < len(prices) else 0
@@ -161,6 +184,7 @@ class PolymarketService:
                     "question": question,
                 })
             else:
+                # Multi-outcome market
                 for o, p in zip(outs, prices):
                     try:
                         prob = float(p)
@@ -183,12 +207,12 @@ class PolymarketService:
             "title": ev.get("title", ""),
             "slug": ev.get("slug", ""),
             "image": ev.get("image", ""),
-            "category": self._detect_category(ev.get("title", "")),
+            "category": self._detect_category(ev),
             "volume": float(ev.get("volume", 0) or 0),
             "liquidity": float(ev.get("liquidity", 0) or 0),
             "end_date": ev.get("endDate", ""),
             "outcomes": outcomes,
-            "total_markets": len(markets),
+            "markets_count": len(markets),
         }
 
     def _extract_entity(self, question: str, event_title: str) -> str:
@@ -206,29 +230,37 @@ class PolymarketService:
                 return rest[:be_idx].strip()
         return question[:50] if question else "Unknown"
 
-    def _detect_category(self, title: str) -> str:
-        """Detect the sport category from event title."""
-        t = title.lower()
+    def _detect_category(self, ev: dict) -> str:
+        """Detect the sport category from event title and description."""
+        title = ev.get("title", "")
+        desc = ev.get("description", "") or ""
+        t = f"{title} {desc}".lower()
+
+        # NBA first (our focus)
         if "nba" in t or "basketball" in t:
             return "NBA"
-        elif "nfl" in t or "super bowl" in t:
+        if any(team in t for team in NBA_TEAMS):
+            return "NBA"
+
+        # Other sports
+        if "nfl" in t or "super bowl" in t or "football" in t:
             return "NFL"
-        elif "nhl" in t or "stanley cup" in t:
+        if "nhl" in t or "stanley cup" in t or "hockey" in t:
             return "NHL"
-        elif "mlb" in t or "world series" in t:
+        if "mlb" in t or "world series" in t or "baseball" in t:
             return "MLB"
-        elif "premier league" in t:
+        if "premier league" in t:
             return "EPL"
-        elif "champions league" in t or "uefa" in t:
+        if "champions league" in t or "uefa" in t:
             return "UCL"
-        elif "fifa" in t or "world cup" in t:
+        if "fifa" in t or "world cup" in t:
             return "FIFA"
-        elif "f1" in t or "formula" in t:
+        if "f1" in t or "formula" in t:
             return "F1"
-        elif "ufc" in t or "boxing" in t:
+        if "ufc" in t or "boxing" in t:
             return "UFC"
-        elif "mvp" in t:
+        if "mvp" in t or "dpoy" in t or "defensive player" in t:
             return "Award"
-        elif "rookie" in t or "cy young" in t:
+        if "rookie" in t or "cy young" in t:
             return "Award"
         return "Sports"
