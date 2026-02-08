@@ -14,7 +14,8 @@ import PromptBar from "@/components/PromptBar";
 import LoadingSkeleton from "@/components/LoadingSkeleton";
 import AnalysisView from "@/components/AnalysisView";
 import ParlayBuilder, { ParlayLeg } from "@/components/ParlayBuilder";
-import { RefreshCw, Zap, ExternalLink, Brain, BarChart3 } from "lucide-react";
+import SuggestedParlays from "@/components/SuggestedParlays";
+import { RefreshCw, Zap, ExternalLink, Brain, BarChart3, Layers } from "lucide-react";
 
 export default function Home() {
   const [games, setGames] = useState<NBAGame[]>([]);
@@ -321,30 +322,36 @@ export default function Home() {
           {/* Games grid */}
           {activeTab === "games" && (
             <>
+              {/* Suggested Parlays */}
+              {gamesWithPredictions > 1 && (
+                <SuggestedParlays
+                  games={games}
+                  onApplyParlay={(legs: ParlayLeg[]) => {
+                    setParlayLegs(legs);
+                    setParlayOpen(true);
+                  }}
+                />
+              )}
+
               {gamesWithPredictions > 0 && (
-                <div className="mb-4 p-3 rounded-xl bg-bg-elevated border border-border flex items-center gap-3">
-                  <Brain size={16} className="text-accent flex-shrink-0" />
-                  <p className="text-xs text-text-secondary">
+                <div className="mb-5 p-4 rounded-2xl bg-gradient-to-r from-accent/5 to-transparent border border-accent/10 flex items-center gap-3">
+                  <Brain size={18} className="text-accent flex-shrink-0" />
+                  <p className="text-xs text-text-secondary leading-relaxed">
                     Each card shows two bars:{" "}
                     <span className="text-text-primary font-semibold">Market</span>{" "}
                     (Polymarket odds) and{" "}
-                    <span className="text-text-primary font-semibold">Model</span>{" "}
-                    (our ML prediction). Compare the split to spot differences.{" "}
-                    <span
-                      className="cat-pill"
-                      style={{
-                        background: "rgba(251, 146, 60, 0.14)",
-                        color: "#fb923c",
-                      }}
-                    >
-                      Edge
+                    <span className="text-text-primary font-semibold">AI Model</span>{" "}
+                    (our ML prediction). Click a team logo to add to your parlay.{" "}
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
+                      style={{ background: "rgba(251,146,60,0.15)", color: "#fb923c" }}>
+                      <Zap size={8} /> EDGE
                     </span>{" "}
-                    = model disagrees with the market on the favorite.
+                    = model disagrees with the market.
                   </p>
                 </div>
               )}
               {games.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
                   {games.map((game, i) => (
                     <GameCard
                       key={game.id}
@@ -369,7 +376,7 @@ export default function Home() {
           {activeTab === "futures" && (
             <>
               {futures.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
                   {futures.map((ev, i) => (
                     <EventCard
                       key={ev.id}

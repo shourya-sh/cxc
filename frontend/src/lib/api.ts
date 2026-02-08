@@ -103,7 +103,7 @@ export interface ModelInfo {
 
 /** Fetch all NBA data: games + futures */
 export async function fetchAllNBA(): Promise<{ games: NBAGame[]; futures: NBAFuture[] }> {
-  return apiFetch("/events/");
+  return apiFetch("/events");
 }
 
 /** Fetch only NBA games */
@@ -129,7 +129,7 @@ export async function searchEvents(query: string): Promise<NBAEvent[]> {
 
 /** Fetch games with ML predictions attached */
 export async function fetchPredictions(): Promise<{ games: NBAGame[]; model_accuracy: number | null }> {
-  return apiFetch("/predictions/");
+  return apiFetch("/predictions");
 }
 
 /** Fetch model metadata + available charts */

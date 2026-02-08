@@ -56,6 +56,67 @@ html, body {
   box-shadow: 0 0 40px rgba(167, 139, 250, 0.06);
 }
 
+/* Game card — big square-ish redesign */
+.game-card-container {
+  position: relative;
+  background: rgba(17, 17, 19, 0.9);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 24px;
+  padding: 24px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+.game-card-container:hover {
+  border-color: rgba(167, 139, 250, 0.25);
+  box-shadow:
+    0 0 60px rgba(167, 139, 250, 0.06),
+    0 8px 32px rgba(0, 0, 0, 0.3);
+  transform: translateY(-2px);
+}
+
+/* Team logo hover effect */
+.team-logo-btn {
+  cursor: pointer;
+}
+.team-logo-btn:hover .team-logo {
+  transform: scale(1.08);
+  filter: drop-shadow(0 4px 20px rgba(167, 139, 250, 0.2));
+}
+.team-logo {
+  transition: all 0.3s ease;
+}
+
+/* Parlay panel slide-in */
+.parlay-panel-slide {
+  background: rgba(17, 17, 19, 0.98);
+  backdrop-filter: blur(40px);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  animation: slideInRight 0.3s ease;
+}
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+/* Suggested parlay card */
+.suggested-parlay-card {
+  position: relative;
+  background: rgba(17, 17, 19, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 20px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+.suggested-parlay-card:hover {
+  border-color: rgba(167, 139, 250, 0.3);
+  box-shadow: 0 4px 24px rgba(167, 139, 250, 0.08);
+  transform: translateY(-1px);
+}
+
 /* Probability bar */
 .prob-bar {
   height: 6px;
