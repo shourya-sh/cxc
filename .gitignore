@@ -5,26 +5,6 @@ __pycache__/
 venv/
 .venv/
 
-# Environment
 .env
-.env.local
-
-# Build
-.next/
-out/
-dist/
-build/
-
-# ML models (large binary files)
-backend/ml/models/*.pkl
-backend/ml/data/*.csv
 
 
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
