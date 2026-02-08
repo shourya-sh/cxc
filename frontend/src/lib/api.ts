@@ -36,6 +36,10 @@ export interface GamePrediction {
   model_accuracy: number;
   model_type: string;
   features_used: number;
+  predicted_home_score?: number;
+  predicted_away_score?: number;
+  predicted_total?: number;
+  predicted_margin?: number;
 }
 
 /** An NBA game matchup (e.g. "Celtics vs. Pistons") */

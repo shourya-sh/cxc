@@ -1,9 +1,9 @@
 """
-Prediction Service — NBA Game Win/Loss Predictions
-───────────────────────────────────────────────────
-Loads the optimized model from the notebook analysis,
+Prediction Service — NBA Game Win/Loss + Score Predictions
+──────────────────────────────────────────────────────────
+Loads the optimized classifier AND the score regressor,
 builds live features for upcoming Polymarket games,
-and returns predictions with confidence scores.
+and returns predictions with confidence scores + predicted scores.
 """
 
 import os
@@ -14,6 +14,7 @@ from loguru import logger
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH = os.path.join(BACKEND_DIR, "model", "nba_model_optimized.pkl")
+SCORE_MODEL_PATH = os.path.join(BACKEND_DIR, "model", "nba_score_model.pkl")
 
 # Map common Polymarket team names → NBA API city names → team IDs
 TEAM_NAME_TO_ID = {
@@ -55,10 +56,15 @@ class PredictionService:
         self.model = None
         self.features = None
         self.metrics = None
+        self.score_home_model = None
+        self.score_away_model = None
+        self.score_features = None
+        self.score_metrics = None
         self._load_model()
+        self._load_score_model()
 
     def _load_model(self):
-        """Load the optimized model bundle from the notebook."""
+        """Load the optimized classifier bundle from the notebook."""
         try:
             with open(MODEL_PATH, "rb") as f:
                 bundle = pickle.load(f)
@@ -66,11 +72,26 @@ class PredictionService:
             self.features = bundle["features"]
             self.metrics = bundle["metrics"]
             self.dropped = bundle.get("dropped_features", [])
-            logger.info(f"Loaded optimized model: {len(self.features)} features, "
+            logger.info(f"Loaded classifier: {len(self.features)} features, "
                         f"acc={self.metrics['accuracy']:.4f}")
         except Exception as e:
-            logger.error(f"Failed to load model: {e}")
+            logger.error(f"Failed to load classifier: {e}")
             self.model = None
+
+    def _load_score_model(self):
+        """Load the score regressor bundle."""
+        try:
+            with open(SCORE_MODEL_PATH, "rb") as f:
+                bundle = pickle.load(f)
+            self.score_home_model = bundle["home_model"]
+            self.score_away_model = bundle["away_model"]
+            self.score_features = bundle["features"]
+            self.score_metrics = bundle.get("metrics", {})
+            logger.info(f"Loaded score model: {len(self.score_features)} features, "
+                        f"home_mae={self.score_metrics.get('home_mae', '?')}")
+        except Exception as e:
+            logger.error(f"Failed to load score model: {e}")
+            self.score_home_model = None
 
     def resolve_team_id(self, name: str) -> int | None:
         """Resolve a Polymarket team name to an NBA API team ID."""
@@ -95,19 +116,18 @@ class PredictionService:
 
         try:
             from data.features import getSingleGameFeatureSet
-            feature_df = getSingleGameFeatureSet(home_id, away_id)
-            # Only use the optimized features
-            feature_df = feature_df[self.features]
-            feature_df = feature_df.fillna(0)
+            full_feature_df = getSingleGameFeatureSet(home_id, away_id)
 
-            pred = self.model.predict(feature_df)[0]
-            proba = self.model.predict_proba(feature_df)[0]
+            # --- Classifier prediction ---
+            clf_df = full_feature_df[self.features].fillna(0)
+            pred = self.model.predict(clf_df)[0]
+            proba = self.model.predict_proba(clf_df)[0]
 
             home_win_prob = float(proba[1])
             away_win_prob = float(proba[0])
             confidence = max(home_win_prob, away_win_prob)
 
-            return {
+            result = {
                 "home_team": home_team,
                 "away_team": away_team,
                 "home_win_probability": round(home_win_prob, 4),
@@ -118,6 +138,21 @@ class PredictionService:
                 "model_type": "GradientBoostingClassifier",
                 "features_used": len(self.features),
             }
+
+            # --- Score prediction ---
+            if self.score_home_model and self.score_features:
+                try:
+                    score_df = full_feature_df.reindex(columns=self.score_features, fill_value=0).fillna(0)
+                    home_score = float(self.score_home_model.predict(score_df)[0])
+                    away_score = float(self.score_away_model.predict(score_df)[0])
+                    result["predicted_home_score"] = round(home_score)
+                    result["predicted_away_score"] = round(away_score)
+                    result["predicted_total"] = round(home_score + away_score)
+                    result["predicted_margin"] = round(home_score - away_score, 1)
+                except Exception as e:
+                    logger.warning(f"Score prediction failed: {e}")
+
+            return result
         except Exception as e:
             logger.error(f"Prediction failed for {home_team} vs {away_team}: {e}")
             return None

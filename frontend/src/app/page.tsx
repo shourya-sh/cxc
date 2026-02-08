@@ -13,6 +13,7 @@ import EventModal from "@/components/EventModal";
 import PromptBar from "@/components/PromptBar";
 import LoadingSkeleton from "@/components/LoadingSkeleton";
 import AnalysisView from "@/components/AnalysisView";
+import ParlayBuilder, { ParlayLeg } from "@/components/ParlayBuilder";
 import { RefreshCw, Zap, ExternalLink, Brain, BarChart3 } from "lucide-react";
 
 export default function Home() {
@@ -26,6 +27,55 @@ export default function Home() {
     "games"
   );
   const [modelAccuracy, setModelAccuracy] = useState<number | null>(null);
+  const [parlayLegs, setParlayLegs] = useState<ParlayLeg[]>([]);
+  const [parlayOpen, setParlayOpen] = useState(false);
+
+  /** Toggle a team pick for parlay — add, switch team, or remove */
+  const handlePickTeam = (game: NBAGame, teamName: string) => {
+    setParlayLegs((prev) => {
+      const existing = prev.find((l) => l.game.id === game.id);
+      if (existing && existing.pickedTeam === teamName) {
+        // Same team clicked again → remove
+        return prev.filter((l) => l.game.id !== game.id);
+      }
+
+      // Figure out model + market prob for the picked team
+      const pred = game.prediction;
+      const [t1, t2] = game.teams;
+      let modelProb = 0.5;
+      let marketProb = 0.5;
+
+      if (pred && t1 && t2) {
+        const t1Lower = t1.name.toLowerCase();
+        const homeLower = pred.home_team.toLowerCase();
+        const isT1Home = t1Lower.includes(homeLower) || homeLower.includes(t1Lower);
+
+        if (teamName === t1.name) {
+          modelProb = isT1Home ? pred.home_win_probability : pred.away_win_probability;
+          marketProb = t1.probability;
+        } else {
+          modelProb = isT1Home ? pred.away_win_probability : pred.home_win_probability;
+          marketProb = t2.probability;
+        }
+      } else if (t1 && t2) {
+        // No model prediction — just use market odds
+        marketProb = teamName === t1.name ? t1.probability : t2.probability;
+        modelProb = marketProb;
+      }
+
+      const newLeg: ParlayLeg = { game, pickedTeam: teamName, modelProb, marketProb };
+
+      if (existing) {
+        // Switch team on same game
+        return prev.map((l) => (l.game.id === game.id ? newLeg : l));
+      }
+      // Add new leg
+      return [...prev, newLeg];
+    });
+
+    // Auto-open the panel when first pick is made
+    setParlayOpen(true);
+  };
 
   const loadData = async () => {
     setLoading(true);
@@ -296,7 +346,13 @@ export default function Home() {
               {games.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                   {games.map((game, i) => (
-                    <GameCard key={game.id} game={game} index={i} />
+                    <GameCard
+                      key={game.id}
+                      game={game}
+                      index={i}
+                      onPickTeam={handlePickTeam}
+                      parlayPickedTeam={parlayLegs.find((l) => l.game.id === game.id)?.pickedTeam ?? null}
+                    />
                   ))}
                 </div>
               ) : (
@@ -364,6 +420,15 @@ export default function Home() {
           </footer>
         </>
       )}
+
+      {/* Parlay Builder */}
+      <ParlayBuilder
+        legs={parlayLegs}
+        onRemoveLeg={(gameId) => setParlayLegs((prev) => prev.filter((l) => l.game.id !== gameId))}
+        onClear={() => setParlayLegs([])}
+        isOpen={parlayOpen}
+        onToggle={() => setParlayOpen((o) => !o)}
+      />
     </div>
   );
 }
